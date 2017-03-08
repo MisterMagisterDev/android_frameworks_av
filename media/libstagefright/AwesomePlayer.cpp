@@ -238,7 +238,7 @@ AwesomePlayer::AwesomePlayer()
 #ifdef MTK_HARDWARE
       mAVSyncTimeUs(-1),
 #endif
-      mIsFirstFrameAfterResume(false) {
+      mIsFirstFrameAfterResume(false){
     CHECK_EQ(mClient.connect(), (status_t)OK);
 
     DataSource::RegisterDefaultSniffers();
@@ -1129,10 +1129,10 @@ status_t AwesomePlayer::play_l() {
             status_t err = startAudioPlayer_l(
                     false /* sendErrorNotification */);
 
-#ifndef QCOM_DIRECTTRACK
-            if ((err != OK) && mOffloadAudio) {
-#else
+#ifdef QCOM_DIRECTTRACK
             if ((err != OK) && (mOffloadAudio || mIsTunnelAudio)) {
+#else
+            if ((err != OK) && mOffloadAudio) {
 #endif
                  err = fallbackToSWDecoder();
             }
@@ -1331,10 +1331,8 @@ void AwesomePlayer::createAudioPlayer_l()
     }
     char lpaDecode[PROPERTY_VALUE_MAX];
     uint32_t minDurationForLPA = LPA_MIN_DURATION_USEC_DEFAULT;
-    char minUserDefDuration[PROPERTY_VALUE_MAX];
     property_get("lpa.decode",lpaDecode,"0");
-    property_get("lpa.min_duration",minUserDefDuration,"LPA_MIN_DURATION_USEC_DEFAULT");
-    minDurationForLPA = atoi(minUserDefDuration);
+    minDurationForLPA = (uint32_t) property_get_int32("lpa.min_duration", LPA_MIN_DURATION_USEC_DEFAULT);
     if(minDurationForLPA < LPA_MIN_DURATION_USEC_ALLOWED) {
         ALOGE("LPAPlayer::Clip duration setting of less than 30sec not supported, defaulting to 60sec");
         if(mAudioPlayer == NULL) {
@@ -1960,10 +1958,8 @@ status_t AwesomePlayer::initAudioDecoder() {
         int64_t durationUs;
         char lpaDecode[128];
         uint32_t minDurationForLPA = LPA_MIN_DURATION_USEC_DEFAULT;
-        char minUserDefDuration[PROPERTY_VALUE_MAX];
         property_get("lpa.decode",lpaDecode,"0");
-        property_get("lpa.min_duration",minUserDefDuration,"LPA_MIN_DURATION_USEC_DEFAULT");
-        minDurationForLPA = atoi(minUserDefDuration);
+        minDurationForLPA = (uint32_t) property_get_int32("lpa.min_duration", LPA_MIN_DURATION_USEC_DEFAULT);
         if(minDurationForLPA < LPA_MIN_DURATION_USEC_ALLOWED) {
             ALOGE("LPAPlayer::Clip duration setting of less than 30sec not supported, defaulting to 60sec");
             minDurationForLPA = LPA_MIN_DURATION_USEC_DEFAULT;
@@ -2009,6 +2005,34 @@ status_t AwesomePlayer::initAudioDecoder() {
     if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_RAW)) {
         ALOGV("createAudioPlayer: bypass OMX (raw)");
         mAudioSource = mAudioTrack;
+#ifdef USE_ALP_AUDIO
+     } else if (mVideoTrack == NULL && !strncasecmp(mime, MEDIA_MIMETYPE_AUDIO_MPEG, 10)) {
+        mAudioSource = OMXCodec::Create(
+            mClient.interface(), mAudioTrack->getFormat(),
+            false,  // createEncoder
+            mAudioTrack,
+            "OMX.Exynos.MP3.Decoder");
+        if (mAudioSource == NULL) {
+            mAudioSource = OMXCodec::Create(
+                    mClient.interface(), mAudioTrack->getFormat(),
+                    false,  // createEncoder
+                    mAudioTrack);
+        }
+#endif
+#ifdef USE_SEIREN_AUDIO
+     } else if (mVideoTrack == NULL && !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)) {
+        mAudioSource = OMXCodec::Create(
+            mClient.interface(), mAudioTrack->getFormat(),
+            false,  // createEncoder
+            mAudioTrack,
+            "OMX.Exynos.AAC.Decoder");
+        if (mAudioSource == NULL) {
+            mAudioSource = OMXCodec::Create(
+                    mClient.interface(), mAudioTrack->getFormat(),
+                    false,  // createEncoder
+                    mAudioTrack);
+        }
+#endif
         // For PCM offload fallback
         if (mOffloadAudio) {
             mOmxSource = mAudioSource;
@@ -2426,7 +2450,11 @@ void AwesomePlayer::onVideoEvent() {
 
     if (mAudioPlayer != NULL && !(mFlags & (AUDIO_RUNNING | SEEK_PREVIEW))) {
         status_t err = startAudioPlayer_l(false /* sendErrorNotification */);
+#ifdef QCOM_DIRECTTRACK
+        if ((err != OK) && (mOffloadAudio || mIsTunnelAudio)) {
+#else
         if ((err != OK) && mOffloadAudio) {
+#endif
             err = fallbackToSWDecoder();
         }
 
@@ -2902,11 +2930,11 @@ status_t AwesomePlayer::finishSetDataSource_l() {
             // The widevine extractor does its own caching.
 
 #if 0
-            mCachedSource = new NuCachedSource2(
+            mCachedSource = NuCachedSource2::Create(
                     new ThrottledSource(
                         mConnectingDataSource, 50 * 1024 /* bytes/sec */));
 #else
-            mCachedSource = new NuCachedSource2(
+            mCachedSource = NuCachedSource2::Create(
                     mConnectingDataSource,
                     cacheConfig.isEmpty() ? NULL : cacheConfig.string(),
                     disconnectAtHighwatermark);

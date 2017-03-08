@@ -2,7 +2,7 @@ LOCAL_PATH:= $(call my-dir)
 
 ifeq ($(call is-vendor-board-platform,QCOM),true)
 
-ifeq ($(call is-board-platform-in-list, apq8084 msm8974 msm8226 msm8610),true)
+ifeq ($(call is-board-platform-in-list, apq8084 msm8974 msm8226 msm8610 msm8994),true)
 ifneq ($(strip $(AUDIO_FEATURE_ENABLED_COMPRESS_VOIP)),false)
 common_cflags += -DAUDIO_EXTN_COMPRESS_VOIP_ENABLED
 endif
@@ -64,6 +64,10 @@ endif
 
 ifeq ($(TARGET_ENABLE_QC_AV_ENHANCEMENTS),true)
 common_cflags += -DENABLE_AV_ENHANCEMENTS
+endif
+
+ifeq ($(AUDIO_FEATURE_DEEP_BUFFER_RINGTONE),true)
+common_cflags += -DDEEP_BUFFER_RINGTONE
 endif
 
 endif
@@ -139,6 +143,7 @@ LOCAL_STATIC_LIBRARIES := \
 
 ifeq ($(strip $(AUDIO_FEATURE_ENABLED_DTS_EAGLE)),true)
   LOCAL_CFLAGS += -DDTS_EAGLE
+  LOCAL_ADDITIONAL_DEPENDENCIES := $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr
   LOCAL_C_INCLUDES += $(TARGET_OUT_INTERMEDIATES)/KERNEL_OBJ/usr/include
   LOCAL_SRC_FILES += AudioUtil.c
 endif
