@@ -33,6 +33,7 @@ LOCAL_STATIC_LIBRARIES := \
 
 LOCAL_C_INCLUDES := \
     frameworks/av/media/libmediaplayerservice \
+    frameworks/av/media/libmedia \
     frameworks/av/services/medialog \
     frameworks/av/services/audioflinger \
     frameworks/av/services/audiopolicy \
@@ -44,6 +45,10 @@ ifeq ($(strip $(AUDIO_FEATURE_ENABLED_LISTEN)),true)
   LOCAL_SHARED_LIBRARIES += liblisten
   LOCAL_C_INCLUDES += $(TARGET_OUT_HEADERS)/mm-audio/audio-listen
   LOCAL_CFLAGS += -DAUDIO_LISTEN_ENABLED
+endif
+
+ifneq ($(BOARD_NUMBER_OF_CAMERAS),)
+    LOCAL_CFLAGS += -DMAX_CAMERAS=$(BOARD_NUMBER_OF_CAMERAS)
 endif
 
 LOCAL_MODULE:= mediaserver

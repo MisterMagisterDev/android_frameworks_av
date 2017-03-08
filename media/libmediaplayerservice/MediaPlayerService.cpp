@@ -237,7 +237,8 @@ void unmarshallAudioAttributes(const Parcel& parcel, audio_attributes_t *attribu
             // copying array size -1, array for tags was calloc'd, no need to NULL-terminate it
             size_t tagSize = realTagSize > AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - 1 ?
                     AUDIO_ATTRIBUTES_TAGS_MAX_SIZE - 1 : realTagSize;
-            utf16_to_utf8(tags.string(), tagSize, attributes->tags);
+            utf16_to_utf8(tags.string(), tagSize, attributes->tags,
+                    sizeof(attributes->tags) / sizeof(attributes->tags[0]));
         }
     } else {
         ALOGE("unmarshallAudioAttributes() received unflattened tags, ignoring tag values");
@@ -496,6 +497,7 @@ status_t MediaPlayerService::dump(int fd, const Vector<String16>& args)
             while (!feof(f)) {
                 fgets(buffer, SIZE, f);
                 if (strstr(buffer, " /storage/") ||
+                    strstr(buffer, " /mnt/sdcard/") ||
                     strstr(buffer, " /system/sounds/") ||
                     strstr(buffer, " /data/") ||
                     strstr(buffer, " /system/media/")) {
@@ -532,6 +534,7 @@ status_t MediaPlayerService::dump(int fd, const Vector<String16>& args)
                                     linkto[len] = 0;
                                 }
                                 if (strstr(linkto, "/storage/") == linkto ||
+                                    strstr(linkto, "/mnt/sdcard/") == linkto ||
                                     strstr(linkto, "/system/sounds/") == linkto ||
                                     strstr(linkto, "/data/") == linkto ||
                                     strstr(linkto, "/system/media/") == linkto) {
@@ -575,6 +578,12 @@ void MediaPlayerService::removeClient(wp<Client> client)
 {
     Mutex::Autolock lock(mLock);
     mClients.remove(client);
+}
+
+bool MediaPlayerService::hasClient(wp<Client> client)
+{
+    Mutex::Autolock lock(mLock);
+    return mClients.indexOf(client) != NAME_NOT_FOUND;
 }
 
 MediaPlayerService::Client::Client(
@@ -1012,6 +1021,10 @@ status_t MediaPlayerService::Client::setNextPlayer(const sp<IMediaPlayer>& playe
     ALOGV("setNextPlayer");
     Mutex::Autolock l(mLock);
     sp<Client> c = static_cast<Client*>(player.get());
+    if (c != NULL && !mService->hasClient(c)) {
+      return BAD_VALUE;
+    }
+
     mNextClient = c;
 
     if (c != NULL) {
@@ -1701,6 +1714,14 @@ status_t MediaPlayerService::AudioOutput::open(
         return BAD_VALUE;
     }
 
+    // a non null offloadInfo might mean some other flags
+    // are set.
+    if (offloadInfo == NULL) {
+        if (flags == AUDIO_OUTPUT_FLAG_NONE) {
+            flags = AUDIO_OUTPUT_FLAG_PRIMARY;
+        }
+    }
+
     if ((flags & AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD) != 0) {
         frameCount = 0; // AudioTrack will get frame count from AudioFlinger
     } else {
@@ -1956,12 +1977,14 @@ ssize_t MediaPlayerService::AudioOutput::write(const void* buffer, size_t size)
 void MediaPlayerService::AudioOutput::stop()
 {
     ALOGV("stop");
+    mBytesWritten = 0;
     if (mTrack != 0) mTrack->stop();
 }
 
 void MediaPlayerService::AudioOutput::flush()
 {
     ALOGV("flush");
+    mBytesWritten = 0;
     if (mTrack != 0) mTrack->flush();
 }
 

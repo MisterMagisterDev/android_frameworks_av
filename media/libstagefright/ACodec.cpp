@@ -70,6 +70,9 @@
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AMessage.h>
 #include <media/stagefright/foundation/AUtils.h>
+#ifdef QCOM_BSP_LEGACY
+#include <media/stagefright/MetaData.h>
+#endif
 
 #include <media/stagefright/BufferProducerWrapper.h>
 #include <media/stagefright/MediaCodecList.h>
@@ -102,6 +105,10 @@
 #ifdef DTS_CODEC_M_
 #include "include/DTSUtils.h"
 #include "include/OMX_Audio_DTS.h"
+#endif
+
+#ifdef QCOM_BSP_LEGACY
+#include <stagefright/Utils.h>
 #endif
 
 namespace android {
@@ -461,6 +468,7 @@ ACodec::ACodec()
       mSentFormat(false),
       mIsEncoder(false),
       mUseMetadataOnEncoderOutput(false),
+      mFatalError(false),
       mShutdownInProgress(false),
       mExplicitShutdown(false),
       mEncoderDelay(0),
@@ -626,7 +634,9 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
 
             for (OMX_U32 i = 0; i < def.nBufferCountActual; ++i) {
                 sp<IMemory> mem = mDealer[portIndex]->allocate(def.nBufferSize);
-                CHECK(mem.get() != NULL);
+                if (mem == NULL || mem->pointer() == NULL) {
+                    return NO_MEMORY;
+                }
 
                 BufferInfo info;
                 info.mStatus = BufferInfo::OWNED_BY_US;
@@ -890,6 +900,16 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
         return err;
     }
 
+#ifdef QCOM_BSP_LEGACY
+    err = mNativeWindow.get()->perform(mNativeWindow.get(),
+            NATIVE_WINDOW_SET_BUFFERS_SIZE, def.nBufferSize);
+    if (err != 0) {
+        ALOGE("mNativeWindow.get()->perform() faild: %s (%d)", strerror(-err),
+                -err);
+        return err;
+    }
+#endif
+
     *bufferCount = def.nBufferCountActual;
     *bufferSize =  def.nBufferSize;
     return err;
@@ -987,7 +1007,9 @@ status_t ACodec::allocateOutputMetaDataBuffers() {
 
         sp<IMemory> mem = mDealer[kPortIndexOutput]->allocate(
                 sizeof(struct VideoDecoderOutputMetaData));
-        CHECK(mem.get() != NULL);
+        if (mem == NULL || mem->pointer() == NULL) {
+            return NO_MEMORY;
+        }
         info.mData = new ABuffer(mem->pointer(), mem->size());
 
         // we use useBuffer for metadata regardless of quirks
@@ -1029,7 +1051,13 @@ void ACodec::setNativeWindowColorFormat(OMX_COLOR_FORMATTYPE &eNativeColorFormat
 {
     // In case of Samsung decoders, we set proper native color format for the Native Window
     if (!strcasecmp(mComponentName.c_str(), "OMX.SEC.AVC.Decoder")
+<<<<<<< HEAD
         || !strcasecmp(mComponentName.c_str(), "OMX.SEC.FP.AVC.Decoder")) {
+=======
+        || !strcasecmp(mComponentName.c_str(), "OMX.SEC.FP.AVC.Decoder")
+        || !strcasecmp(mComponentName.c_str(), "OMX.SEC.MPEG4.Decoder")
+        || !strcasecmp(mComponentName.c_str(), "OMX.Exynos.AVC.Decoder")) {
+>>>>>>> e895b3f17d378a2bc2dfd0f70ce7d47bc42196b3
         switch (eNativeColorFormat) {
             case OMX_COLOR_FormatYUV420SemiPlanar:
                 eNativeColorFormat = (OMX_COLOR_FORMATTYPE)HAL_PIXEL_FORMAT_YCbCr_420_SP;
@@ -1067,6 +1095,11 @@ ACodec::BufferInfo *ACodec::dequeueBufferFromNativeWindow() {
     if (mTunneled) {
         ALOGW("dequeueBufferFromNativeWindow() should not be called in tunnel"
               " video playback mode mode!");
+        return NULL;
+    }
+
+    if (mFatalError) {
+        ALOGW("not dequeuing from native window due to fatal error");
         return NULL;
     }
 
@@ -1113,7 +1146,8 @@ ACodec::BufferInfo *ACodec::dequeueBufferFromNativeWindow() {
         VideoDecoderOutputMetaData *metaData =
             reinterpret_cast<VideoDecoderOutputMetaData *>(
                     oldest->mData->base());
-        CHECK_EQ(metaData->eType, kMetadataBufferTypeGrallocSource);
+        // metaData is only readable if codec is in the same process
+        //CHECK_EQ(metaData->eType, kMetadataBufferTypeGrallocSource);
 
         ALOGV("replaced oldest buffer #%u with age %u (%p/%p stored in %p)",
                 oldest - &mBuffers[kPortIndexOutput][0],
@@ -1641,6 +1675,19 @@ status_t ACodec::configureCodec(
         if (encoder) {
             err = setupVideoEncoder(mime, msg);
         } else {
+#ifdef QCOM_BSP_LEGACY
+            if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC)) {
+                sp<MetaData> meta = new MetaData;
+                const void *data;
+                size_t size;
+                uint32_t type;
+                convertMessageToMetaData(msg, meta);
+
+                if (meta->findData(kKeyAVCC, &type, &data, &size)) {
+                    ExtendedUtils::setArbitraryModeIfInterlaced((const uint8_t *)data, meta);
+                }
+            }
+#endif
             err = setupVideoDecoder(mime, msg, haveNativeWindow);
 #ifdef ENABLE_AV_ENHANCEMENTS
             if (err == OK) {
@@ -2124,6 +2171,7 @@ status_t ACodec::setupAACCodec(
             : OMX_AUDIO_AACStreamFormatMP4FF;
 
     OMX_AUDIO_PARAM_ANDROID_AACPRESENTATIONTYPE presentation;
+    InitOMXParams(&presentation);
     presentation.nMaxOutputChannels = maxOutputChannelCount;
     presentation.nDrcCut = drc.drcCut;
     presentation.nDrcBoost = drc.drcBoost;
@@ -3173,7 +3221,7 @@ status_t ACodec::setupAVCEncoderParameters(const sp<AMessage> &msg) {
 
     // XXX
     // Allow higher profiles to be set since the encoder seems to support
-#if 0
+#ifdef USE_AVC_BASELINE_PROFILE
     if (h264type.eProfile != OMX_VIDEO_AVCProfileBaseline) {
         ALOGW("Use baseline profile instead of %d for AVC recording",
             h264type.eProfile);
@@ -3422,7 +3470,7 @@ status_t ACodec::setupErrorCorrectionParameters() {
     }
 
     errorCorrectionType.bEnableHEC = OMX_FALSE;
-    errorCorrectionType.bEnableResync = OMX_TRUE;
+    errorCorrectionType.bEnableResync = OMX_FALSE;
     errorCorrectionType.nResynchMarkerSpacing = 0;
     errorCorrectionType.bEnableDataPartitioning = OMX_FALSE;
     errorCorrectionType.bEnableRVLC = OMX_FALSE;
@@ -3917,9 +3965,6 @@ status_t ACodec::getPortFormat(OMX_U32 portIndex, sp<AMessage> &notify) {
                     notify->setInt32("channel-count", params.nChannels);
                     notify->setInt32("sample-rate", params.nSamplingRate);
 
-                    CHECK(params.nBitPerSample == 16u ||
-                          params.nBitPerSample == 24u ||
-                          params.nBitPerSample == 32u);
                     notify->setInt32("bits-per-sample", params.nBitPerSample);
 
                     if (mChannelMaskPresent) {
@@ -4232,6 +4277,9 @@ void ACodec::signalError(OMX_ERRORTYPE error, status_t internalError) {
             ALOGW("Invalid OMX error %#x", error);
         }
     }
+
+    mFatalError = true;
+
     notify->setInt32("err", internalError);
     notify->setInt32("actionCode", ACTION_CODE_FATAL); // could translate from OMX error.
     notify->post();
@@ -6323,6 +6371,21 @@ void ACodec::ExecutingToIdleState::changeStateIfWeOwnAllBuffers() {
         CHECK_EQ(mCodec->freeBuffersOnPort(kPortIndexInput), (status_t)OK);
         CHECK_EQ(mCodec->freeBuffersOnPort(kPortIndexOutput), (status_t)OK);
 
+#ifdef QCOM_BSP_LEGACY
+        if(mCodec->mNativeWindow != NULL) {
+            /*
+             * reset buffer size field with SurfaceTexture
+             * back to 0. This wil ensure proper size
+             * buffers are allocated if the same SurfaceTexture
+             * is re-used in a different decode session
+             */
+            int err = mCodec->mNativeWindow.get()->perform(mCodec->mNativeWindow.get(),
+                                                            NATIVE_WINDOW_SET_BUFFERS_SIZE, 0);
+            if (err != 0) {
+                ALOGE("mNativeWindow.get()->Perform() failed: %s (%d)", strerror(-err),-err);
+            }
+#endif
+
         if ((mCodec->mFlags & kFlagPushBlankBuffersToNativeWindowOnShutdown)
                 && mCodec->mNativeWindow != NULL) {
             // We push enough 1x1 blank buffers to ensure that one of
@@ -6331,6 +6394,9 @@ void ACodec::ExecutingToIdleState::changeStateIfWeOwnAllBuffers() {
             // without the risk of scanning out one of those buffers.
             mCodec->pushBlankBuffersToNativeWindow();
         }
+#ifdef QCOM_BSP_LEGACY
+       }
+#endif
 
         mCodec->changeState(mCodec->mIdleToLoadedState);
     }
